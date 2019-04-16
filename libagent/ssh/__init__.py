@@ -15,6 +15,7 @@ import pkg_resources
 import configargparse
 import daemon
 
+from pathlib import Path
 from .. import device, formats, server, util
 from . import client, protocol
 
@@ -183,6 +184,15 @@ def parse_config(contents):
         yield device.interface.Identity(identity_str=identity_str,
                                         curve_name=curve_name)
 
+def parse_config_identity_files(contents):
+    identities = ""
+    for identity_file in re.findall('IdentityFile (.*?)$', contents):
+        identity_file_path = Path(identity_file).expanduser().absolute()
+        log.debug('identity_file %s', identity_file_path)
+        id_file_contents = open(identity_file_path, 'rb').read().decode('utf-8')
+        identities += id_file_contents
+    return identities
+
 
 def import_public_keys(contents):
     """Load (previously exported) SSH public keys from a file's contents."""
@@ -260,11 +270,14 @@ def main(device_type):
     filename = None
     if args.identity.startswith('/'):
         filename = args.identity
+        log.debug('filename %s', filename)
         contents = open(filename, 'rb').read().decode('utf-8')
         # Allow loading previously exported SSH public keys
         if filename.endswith('.pub'):
             public_keys = list(import_public_keys(contents))
-        identities = list(parse_config(contents))
+        identity_files = parse_config_identity_files(contents)
+        public_keys = list(import_public_keys(identity_files))
+        identities = list(parse_config(contents+identity_files))
     else:
         identities = [device.interface.Identity(
             identity_str=args.identity, curve_name=args.ecdsa_curve_name)]
