@@ -16,6 +16,9 @@ import configargparse
 import daemon
 
 from pathlib import Path
+from sshconf import read_ssh_config, empty_ssh_config
+from shutil import copyfile
+
 from .. import device, formats, server, util
 from . import client, protocol
 
@@ -93,6 +96,10 @@ def create_agent_parser(device_type):
                    help='Path to the log file (to be written by the agent).')
     p.add_argument('--sock-path', type=str,
                    help='Path to the UNIX domain socket of the agent.')
+    p.add_argument('--save', '-S', default=False, action='store_true',
+                   help='Save all pubkeys to ~/.ssh/{hostname}.pub')
+    p.add_argument('--create-ssh-config', '-C', default=False, action='store_true',
+                   help='Create ssh config for loaded pubkeys')
 
     p.add_argument('--pin-entry-binary', type=str, default='pinentry',
                    help='Path to PIN entry UI helper.')
@@ -187,7 +194,7 @@ def parse_config(contents):
 
 def parse_config_identity_files(contents):
     identities = ""
-    for identity_file in re.findall('IdentityFile (.*?)$', contents):
+    for identity_file in re.findall(r'^.*IdentityFile (.*?\.pub)$', contents, re.MULTILINE):
         identity_file_path = Path(identity_file).expanduser().absolute()
         log.debug('identity_file %s', identity_file_path)
         id_file_contents = open(identity_file_path, 'rb').read().decode('utf-8')
@@ -244,6 +251,39 @@ class JustInTimeConnection:
         conn = self.conn_factory()
         return conn.sign_ssh_challenge(blob=blob, identity=identity)
 
+    def save_public_keys_as_files(self):
+        """Store public keys as permanent SSH identity files in ~/ssh/ ."""
+        for I in self.identities:
+            identity_filename = Path('~/.ssh/' + I.identity_dict['host'] + '.pub').expanduser().absolute()
+            if not identity_filename.is_file():
+                conn = self.conn_factory()
+                f = open(identity_filename, "w")
+                pubkey = conn.export_public_keys([I])[0]
+                log.debug("pubkeys: %s", pubkey)
+                f.write(pubkey)
+                f.flush()
+
+    def update_ssh_config(self, filename):
+        """Insert host config into ssh config if not present."""
+        self.save_public_keys_as_files()
+        if filename is None:
+            filename = Path('~/.ssh/config').expanduser().absolute()
+
+        copyfile(filename, str(filename) + ".backup")
+
+        c = read_ssh_config(filename)
+        for I in self.identities:
+            identity_filename = Path('~/.ssh/' + I.identity_dict['host'] + '.pub').expanduser().absolute()
+            log.debug('ssh config host %s: %s', I.identity_dict['host'], c.host(I.identity_dict['host']))
+            if not c.host(I.identity_dict['host']):
+                c.add(I.identity_dict['host'], Hostname=I.identity_dict['host'], User=I.identity_dict['user'],
+                      IdentityFile=identity_filename)
+            else:
+                c.set(I.identity_dict['host'], Hostname=I.identity_dict['host'], User=I.identity_dict['user'],
+                      IdentityFile=identity_filename)
+
+        c.write(filename)
+
 
 @contextlib.contextmanager
 def _dummy_context():
@@ -271,7 +311,7 @@ def main(device_type):
     filename = None
     if args.identity.startswith('/'):
         filename = args.identity
-        log.debug('filename %s', filename)
+        log.debug('ssh config path: %s', filename)
         contents = open(filename, 'rb').read().decode('utf-8')
         # Allow loading previously exported SSH public keys
         if filename.endswith('.pub'):
@@ -294,6 +334,12 @@ def main(device_type):
     conn = JustInTimeConnection(
         conn_factory=lambda: client.Client(device_type()),
         identities=identities, public_keys=public_keys)
+
+    if args.save:
+        conn.save_public_keys_as_files()
+
+    if args.create_ssh_config:
+        conn.update_ssh_config(filename)
 
     sock_path = _get_sock_path(args)
     command = args.command
