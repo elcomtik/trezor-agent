@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 
 
 # Taken from https://github.com/openssh/openssh-portable/blob/master/authfd.h
+# Added extension mesage types from https://tools.ietf.org/html/draft-miller-ssh-agent-02#page-13
 COMMANDS = dict(
     SSH_AGENTC_REQUEST_RSA_IDENTITIES=1,
     SSH_AGENT_RSA_IDENTITIES_ANSWER=2,
@@ -40,6 +41,8 @@ COMMANDS = dict(
     SSH_AGENTC_ADD_RSA_ID_CONSTRAINED=24,
     SSH2_AGENTC_ADD_ID_CONSTRAINED=25,
     SSH_AGENTC_ADD_SMARTCARD_KEY_CONSTRAINED=26,
+    SSH_AGENTC_EXTENSION=27,
+    SSH_AGENT_EXTENSION_FAILURE=28,
 )
 
 
@@ -86,6 +89,7 @@ class Handler:
             msg_code('SSH_AGENTC_REQUEST_RSA_IDENTITIES'): _legacy_pubs,
             msg_code('SSH2_AGENTC_REQUEST_IDENTITIES'): self.list_pubs,
             msg_code('SSH2_AGENTC_SIGN_REQUEST'): self.sign_message,
+            msg_code('SSH_AGENTC_EXTENSION'): self.process_extension_message,
         }
 
     def handle(self, msg):
@@ -110,8 +114,21 @@ class Handler:
         assert not buf.read()
         keys = self.conn.parse_public_keys()
         code = util.pack('B', msg_code('SSH2_AGENT_IDENTITIES_ANSWER'))
-        num = util.pack('L', len(keys))
         log.debug('available keys: %s', [k['name'] for k in keys])
+
+        log.debug("Active filter: %s", self.conn.filter)
+        if self.conn.filter:
+            #apply filter
+            keys_filtered = []
+            for k in keys:
+                if self.conn.filter[1] in k['name'].decode():
+                    keys_filtered.append(k)
+
+            keys = keys_filtered
+            log.debug('filtered keys: %s', [k['name'] for k in keys])
+            self.conn.clear_filter()
+
+        num = util.pack('L', len(keys))
         for i, k in enumerate(keys):
             log.debug('%2d) %s', i+1, k['fingerprint'])
         pubs = [util.frame(k['blob']) + util.frame(k['name']) for k in keys]
@@ -158,3 +175,82 @@ class Handler:
         data = util.frame(util.frame(key['type']), util.frame(sig_bytes))
         code = util.pack('B', msg_code('SSH2_AGENT_SIGN_RESPONSE'))
         return util.frame(code, data)
+
+    def process_extension_message(self, buf):
+        """
+        SSH agent extension message handler
+        Read content of extension message & execute additional actions according to data payload
+
+        Return success message
+        """
+        # parse received data
+        log.debug("extension message received")
+
+        type = util.read_frame(buf).decode()
+        log.debug('type: "%s"', type)
+        log.debug("IF query: %s", type == 'query')
+
+        if type == 'query':
+            # return list of supported extension message types
+            log.debug('sending list of supported extension message types')
+            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+            data = util.frame(formats.convert_to_bytes('query,filter'))
+            return util.frame(code, data)
+
+        elif type == 'filter':
+            contents = util.read_frame(buf)
+            contents = io.BytesIO(contents)
+            user = util.read_frame(contents).decode()
+            host = util.read_frame(contents).decode()
+            log.debug('contents: %s@%s', user, host)
+
+            #apply filter
+            self.conn.apply_filter(username=user, host=host)
+
+            # return success message
+            log.debug("sending success message")
+            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+            return util.frame(code)
+
+        else:
+            # return failure due to unknnown message type
+            log.debug('unknown extension message type')
+            code = util.pack('B', msg_code('SSH_AGENT_FAILURE'))
+            return  util.frame(code)
+
+
+class Sender:
+    """ssh-agent protocol sender."""
+
+    def __init__(self, conn, socket, debug=False):
+        """Create a protocol sender"""
+        self.conn = conn
+        self.socket = socket
+        self.debug = debug
+
+
+    def send_extension_query_message(self):
+        """Create SSH agent extension query message and receive reply."""
+        log.debug('Request supported extension method list')
+        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
+        type = util.frame(formats.convert_to_bytes('query'))
+        message = util.frame(code, type)
+        util.send(self.socket, message)
+
+    def send_extension_filter_message(self, username, host):
+        """Create SSH agent extension filter message and receive reply."""
+        log.debug('Filter agent available keys')
+        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
+        type = util.frame(formats.convert_to_bytes('filter'))
+        u = util.frame(formats.convert_to_bytes(username))
+        h = util.frame(formats.convert_to_bytes(host))
+        contents = util.frame(u, h)
+        message = util.frame(code, type, contents)
+        util.send(self.socket, message)
+
+
+
+
+
+
+
