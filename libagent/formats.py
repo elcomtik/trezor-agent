@@ -210,3 +210,6 @@ def get_ecdh_curve_name(signature_curve_name):
         CURVE_ED25519: ECDH_CURVE25519,
         ECDH_CURVE25519: ECDH_CURVE25519,
     }[signature_curve_name]
+
+def convert_to_bytes(string):
+    return string.encode()

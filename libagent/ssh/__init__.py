@@ -4,6 +4,7 @@ import functools
 import io
 import logging
 import os
+import socket
 import re
 import signal
 import subprocess
@@ -125,6 +126,16 @@ def create_agent_parser(device_type):
                    help='proto://[user@]host[:port][/path]')
     p.add_argument('command', type=str, nargs='*', metavar='ARGUMENT',
                    help='command to run under the SSH agent')
+
+    p.add_argument('--query', '-q', default=False, action='store_true',
+                   help='Query agent for supported extensions')
+    p.add_argument('-F', '--filter', default=False, action='store_true',
+                   help='Send agent filter extension query')
+    p.add_argument('--user', type=str, default="",
+                   help='Send agent filter extension query')
+    p.add_argument('--host', type=str, default="",
+                   help='Send agent filter extension query')
+
     return p
 
 
@@ -219,6 +230,7 @@ class JustInTimeConnection:
         self.identities = identities
         self.public_keys_cache = public_keys
         self.public_keys_tempfiles = []
+        self.filter = []
 
     def public_keys(self):
         """Return a list of SSH public keys (in textual format)."""
@@ -284,6 +296,12 @@ class JustInTimeConnection:
 
         c.write(filename)
 
+    def apply_filter(self, username, host):
+        self.filter = [username, host]
+
+    def clear_filter(self):
+        self.filter = []
+
 
 @contextlib.contextmanager
 def _dummy_context():
@@ -299,6 +317,57 @@ def _get_sock_path(args):
         else:
             sock_path = tempfile.mktemp(prefix='trezor-ssh-agent-')
     return sock_path
+
+
+def query_agent(conn):
+    agent_sock = os.environ['SSH_AUTH_SOCK']
+
+    if not agent_sock:
+        return
+    else:
+        log.debug('SSH_AUTH_SOCK: %s', agent_sock)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.connect(agent_sock)
+
+        handler = protocol.Sender(conn=conn, socket=server)
+        handler.send_extension_query_message()
+        msg = util.read_frame(server)
+        server.close()
+
+        buf = io.BytesIO(msg)
+        code, = util.recv(buf, '>B')
+        log.debug('received response code %s', code)
+
+        if code == 6:
+            content = util.read_frame(buf).decode()
+            log.debug('supported extension messages: %s', content)
+            return content.split(',')
+        else:
+            return 1
+
+def filter_agent(conn, username, host):
+    agent_sock = os.environ['SSH_AUTH_SOCK']
+
+    if not agent_sock:
+        return
+    else:
+        log.debug('SSH_AUTH_SOCK: %s', agent_sock)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.connect(agent_sock)
+
+        handler = protocol.Sender(conn=conn, socket=server)
+        handler.send_extension_filter_message(username, host)
+        msg = util.read_frame(server)
+        server.close()
+
+        buf = io.BytesIO(msg)
+        code, = util.recv(buf, '>B')
+        log.debug('received response code %s', code)
+
+        if code == 6:
+            return 0
+        else:
+            return 1
 
 
 @handle_connection_error
@@ -361,6 +430,13 @@ def main(device_type):
     if use_shell:
         command = os.environ['SHELL']
         sys.stdin.close()
+
+    if args.query:
+        query_agent(conn)
+
+    if args.filter:
+        if 'filter' in query_agent(conn):
+            filter_agent(conn, username=args.user, host=args.host)
 
     if command or args.daemonize or args.foreground:
         with context:
