@@ -98,6 +98,7 @@ class Handler:
         log.debug('request: %d bytes%s', len(msg), debug_msg)
         buf = io.BytesIO(msg)
         code, = util.recv(buf, '>B')
+        log.debug('received code: %d', code)
         if code not in self.methods:
             log.warning('Unsupported command: %s (%d)', msg_name(code), code)
             return failure()
@@ -185,20 +186,20 @@ class Handler:
         """
         # parse received data
         log.debug("extension message received")
-
+ 
         type = util.read_frame(buf).decode()
         log.debug('type: "%s"', type)
-        log.debug("IF query: %s", type == 'query')
 
         if type == 'query':
             # return list of supported extension message types
             log.debug('sending list of supported extension message types')
             code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
-            data = util.frame(formats.convert_to_bytes('query,filter'))
+            data = util.frame(formats.convert_to_bytes('query,filter@trezor.io'))
             return util.frame(code, data)
 
-        elif type == 'filter':
+        elif type == 'filter@trezor.io':
             contents = util.read_frame(buf)
+            log.debug('raw contents: %s', contents)
             contents = io.BytesIO(contents)
             user = util.read_frame(contents).decode()
             host = util.read_frame(contents).decode()
