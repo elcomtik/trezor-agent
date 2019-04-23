@@ -18,7 +18,8 @@ import daemon
 
 from pathlib import Path
 from sshconf import read_ssh_config, empty_ssh_config
-from shutil import copyfile
+import stat
+import shutil
 
 from .. import device, formats, server, util
 from . import client, protocol
@@ -280,7 +281,11 @@ class JustInTimeConnection:
         if filename is None:
             filename = Path('~/.ssh/config').expanduser().absolute()
 
-        copyfile(filename, str(filename) + ".backup")
+        backup = str(filename) + ".backup"
+        shutil.copy2(filename, backup)
+        st = os.stat(filename)
+        os.chown(backup, st[stat.ST_UID], st[stat.ST_GID])
+        os.chmod(backup, 0o600)
 
         c = read_ssh_config(filename)
         for I in self.identities:
