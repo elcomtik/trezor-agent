@@ -26,6 +26,7 @@ setup(
         'mnemonic>=0.18',
         'pymsgbox>=1.0.6',
         'semver>=2.2',
+        'sshconf',
         'unidecode>=0.4.20',
     ],
     platforms=['POSIX'],
