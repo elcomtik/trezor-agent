@@ -127,14 +127,14 @@ def create_agent_parser(device_type):
     p.add_argument('command', type=str, nargs='*', metavar='ARGUMENT',
                    help='command to run under the SSH agent')
 
-    p.add_argument('--query', '-q', default=False, action='store_true',
-                   help='Query agent for supported extensions')
     p.add_argument('-F', '--filter', default=False, action='store_true',
                    help='Send agent filter extension query')
-    p.add_argument('--user', type=str, default="",
-                   help='Send agent filter extension query')
-    p.add_argument('--host', type=str, default="",
-                   help='Send agent filter extension query')
+    p.add_argument('-a', '--add', default=False, action='store_true',
+                   help='Send agent add extension query')
+    p.add_argument('-r', '--remove', default=False, action='store_true',
+                   help='Send agent remove extension query')
+    p.add_argument('-R', '--removeall', default=False, action='store_true',
+                   help='Send agent remove all extension query')
 
     return p
 
@@ -205,7 +205,7 @@ def parse_config(contents):
 
 def parse_config_identity_files(contents):
     identities = ""
-    for identity_file in re.findall(r'^.*IdentityFile (.*?\.pub)$', contents, re.MULTILINE):
+    for identity_file in re.findall(r'^\s+(?!#+)\s+IdentityFile (.*?\.pub)$', contents, re.MULTILINE):
         identity_file_path = Path(identity_file).expanduser().absolute()
         log.debug('identity_file %s', identity_file_path)
         id_file_contents = open(identity_file_path, 'rb').read().decode('utf-8')
@@ -227,14 +227,14 @@ class JustInTimeConnection:
     def __init__(self, conn_factory, identities, public_keys=None):
         """Create a JIT connection object."""
         self.conn_factory = conn_factory
-        self.identities = identities
+        self.identities = identities        #TODO: make it load identities which are not loadeed as pubkeys
         self.public_keys_cache = public_keys
         self.public_keys_tempfiles = []
         self.filter = []
 
     def public_keys(self):
         """Return a list of SSH public keys (in textual format)."""
-        if not self.public_keys_cache:
+        if not self.public_keys_cache and self.identities:      #TODO: allow start agent without identities
             conn = self.conn_factory()
             self.public_keys_cache = conn.export_public_keys(self.identities)
         return self.public_keys_cache
@@ -257,6 +257,33 @@ class JustInTimeConnection:
                 self.public_keys_tempfiles.append(f)
 
         return self.public_keys_tempfiles
+
+    def add_identity(self, username, host, curve=formats.CURVE_NIST256):
+        #add it to self.identities
+        identity_str = username + "@" + host
+        identity = device.interface.Identity(
+            identity_str=identity_str, curve_name=curve)
+
+        if identity.to_string() not in self.public_keys(): #TODO: this is shity
+            self.identities.append(identity)
+
+            #load it to self.public_keys_cache
+            conn = self.conn_factory()
+            added_pubkey = conn.export_public_keys([identity])
+            self.public_keys_cache.extend(added_pubkey)
+
+    def remove_identity(self, username, host, curve=formats.CURVE_NIST256):
+        #remove it to self.identities
+        identity_str = username + "@" + host
+
+        self.identities = [i for i in self.identities if identity_str not in i.to_string()]
+        self.public_keys_cache = [i for i in self.public_keys_cache if identity_str not in i]
+
+    def remove_all_identities(self):
+        self.identities = []
+        self.public_keys_cache = []
+        self.public_keys_tempfiles = []
+        self.filter = []
 
     def sign(self, blob, identity):
         """Sign a given blob using the specified identity on the device."""
@@ -323,55 +350,39 @@ def _get_sock_path(args):
     return sock_path
 
 
-def query_agent(conn):
-    agent_sock = os.environ['SSH_AUTH_SOCK']
-
-    if not agent_sock:
+def agent_supports_extension(conn, message_type):
+    """Query agetn of support specified extension message"""
+    ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
+    if not ssh_auth_sock:
         return
     else:
-        log.debug('SSH_AUTH_SOCK: %s', agent_sock)
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.connect(agent_sock)
+        log.debug('SSH_AUTH_SOCK: %s', ssh_auth_sock)
+        agent_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        agent_socket.connect(ssh_auth_sock)
 
-        handler = protocol.Sender(conn=conn, socket=server)
-        handler.send_extension_query_message()
-        msg = util.read_frame(server)
-        server.close()
+        sender = protocol.Sender(conn=conn, socket=agent_socket)
+        messages = sender.send(message='query')
 
-        buf = io.BytesIO(msg)
-        code, = util.recv(buf, '>B')
-        log.debug('received response code %s', code)
+        agent_socket.close()
 
-        if code == 6:
-            content = util.read_frame(buf).decode()
-            log.debug('supported extension messages: %s', content)
-            return content.split(',')
-        else:
-            return 1
+        return message_type in messages
 
-def filter_agent(conn, username, host):
-    agent_sock = os.environ['SSH_AUTH_SOCK']
 
-    if not agent_sock:
+def send_extension_msg(conn, message, identity=None):
+    """Send extension query to agent"""
+    ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
+    if not ssh_auth_sock:
         return
     else:
-        log.debug('SSH_AUTH_SOCK: %s', agent_sock)
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.connect(agent_sock)
+        log.debug('SSH_AUTH_SOCK: %s', ssh_auth_sock)
+        agent_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        agent_socket.connect(ssh_auth_sock)
 
-        handler = protocol.Sender(conn=conn, socket=server)
-        handler.send_extension_filter_message(username, host)
-        msg = util.read_frame(server)
-        server.close()
+        sender = protocol.Sender(conn=conn, socket=agent_socket)
+        ret = sender.send(message=message, identity=identity)
 
-        buf = io.BytesIO(msg)
-        code, = util.recv(buf, '>B')
-        log.debug('received response code %s', code)
-
-        if code == 6:
-            return 0
-        else:
-            return 1
+        agent_socket.close()
+    return ret
 
 
 @handle_connection_error
@@ -391,7 +402,7 @@ def main(device_type):
             public_keys = list(import_public_keys(contents))
         identity_files = parse_config_identity_files(contents)
         public_keys = list(import_public_keys(identity_files))
-        identities = list(parse_config(contents+identity_files))
+        identities = list(parse_config(contents+identity_files)) #TODO: make it unique
     else:
         identities = [device.interface.Identity(
             identity_str=args.identity, curve_name=args.ecdsa_curve_name)]
@@ -433,14 +444,19 @@ def main(device_type):
         command = os.environ['SHELL']
         sys.stdin.close()
 
-    if args.query:
-        query_agent(conn)
-
     if args.filter:
-        if 'filter' in query_agent(conn):
-            filter_agent(conn, username=args.user, host=args.host)
-
-    if command or args.daemonize or args.foreground:
+        if agent_supports_extension(conn, 'filter@trezor.io'):
+            send_extension_msg(conn=conn, message='filter', identity=identities[0])
+    elif args.add:
+        if agent_supports_extension(conn, 'add@trezor.io'):
+            [send_extension_msg(conn=conn, message='add', identity=i) for i in identities]
+    elif args.remove:
+        if agent_supports_extension(conn, 'remove@trezor.io'):
+            [send_extension_msg(conn=conn, message='remove', identity=i) for i in identities]
+    elif args.removeall:
+        if agent_supports_extension(conn, 'removeall@trezor.io'):
+            send_extension_msg(conn=conn, message='removeall')
+    elif command or args.daemonize or args.foreground:
         with context:
             return run_server(conn=conn, command=command, sock_path=sock_path,
                               debug=args.debug, timeout=args.timeout)
