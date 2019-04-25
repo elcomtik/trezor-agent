@@ -45,6 +45,13 @@ COMMANDS = dict(
     SSH_AGENT_EXTENSION_FAILURE=28,
 )
 
+EXT_MSGS = [
+    'query',
+    'filter@trezor.io',
+    'add@trezor.io',
+    'remove@trezor.io',
+    'removeall@trezor.io'
+]
 
 def msg_code(name):
     """Convert string name into a integer message code."""
@@ -194,7 +201,7 @@ class Handler:
             # return list of supported extension message types
             log.debug('sending list of supported extension message types')
             code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
-            data = util.frame(formats.convert_to_bytes('query,filter@trezor.io'))
+            data = util.frame(formats.convert_to_bytes(",".join(EXT_MSGS)))
             return util.frame(code, data)
 
         elif type == 'filter@trezor.io':
@@ -213,6 +220,47 @@ class Handler:
             code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
             return util.frame(code)
 
+        elif type == 'add@trezor.io':
+            contents = util.read_frame(buf)
+            log.debug('raw contents: %s', contents)
+            contents = io.BytesIO(contents)
+            user = util.read_frame(contents).decode()
+            host = util.read_frame(contents).decode()
+            log.debug('contents: %s@%s', user, host)
+
+            #add identity
+            self.conn.add_identity(username=user, host=host)
+
+            # return success message
+            log.debug("sending success message")
+            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+            return util.frame(code)
+
+        elif type == 'remove@trezor.io':
+            contents = util.read_frame(buf)
+            log.debug('raw contents: %s', contents)
+            contents = io.BytesIO(contents)
+            user = util.read_frame(contents).decode()
+            host = util.read_frame(contents).decode()
+            log.debug('contents: %s@%s', user, host)
+
+            # remove identity
+            self.conn.remove_identity(username=user, host=host)
+
+            # return success message
+            log.debug("sending success message")
+            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+            return util.frame(code)
+
+        elif type == 'removeall@trezor.io':
+            # remove all identities
+            self.conn.remove_all_identities()
+
+            # return success message
+            log.debug("sending success message")
+            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+            return util.frame(code)
+
         else:
             # return failure due to unknnown message type
             log.debug('unknown extension message type')
@@ -223,12 +271,49 @@ class Handler:
 class Sender:
     """ssh-agent protocol sender."""
 
-    def __init__(self, conn, socket, debug=False):
+    def __init__(self, conn, socket):
         """Create a protocol sender"""
         self.conn = conn
         self.socket = socket
-        self.debug = debug
+        self.identity = None
 
+        self.methods = {
+            'query': self.send_extension_query_message,
+            'filter': self.send_extension_filter_message,
+            'add': self.send_extension_add_identity_message,
+            'remove': self.send_extension_remove_identity_message,
+            'removeall': self.send_extension_remove_all_identities_message,
+        }
+
+    def send(self, message, identity=None):
+        """Send SSH extension message to SSH agent and return the response."""
+        if message not in self.methods:
+            log.warning('Unsupported command: %s', message)
+            return failure()
+
+        self.identity = identity
+        method = self.methods[message]
+        log.debug('calling %s()', method.__name__)
+        method()
+
+        msg = util.read_frame(self.socket)
+
+        buf = io.BytesIO(msg)
+        code, = util.recv(buf, '>B')
+        log.debug('received response code %s', code)
+
+        if message == 'query':
+            if code == msg_code('SSH_AGENT_SUCCESS'):
+                content = util.read_frame(buf).decode()
+                log.debug('supported extension messages: %s', content)
+                return content.split(',')
+            else:
+                return []
+        else:
+            if code == msg_code('SSH_AGENT_SUCCESS'):
+                return 0
+            else:
+                return 1
 
     def send_extension_query_message(self):
         """Create SSH agent extension query message and receive reply."""
@@ -238,17 +323,46 @@ class Sender:
         message = util.frame(code, type)
         util.send(self.socket, message)
 
-    def send_extension_filter_message(self, username, host):
-        """Create SSH agent extension filter message and receive reply."""
+    def send_extension_filter_message(self):
+        """Create SSH agent extension 'filter' message and receive reply."""
         log.debug('Filter agent available keys')
         code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
-        type = util.frame(formats.convert_to_bytes('filter'))
-        u = util.frame(formats.convert_to_bytes(username))
-        h = util.frame(formats.convert_to_bytes(host))
+        type = util.frame(formats.convert_to_bytes('filter@trezor.io'))
+        u = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('user', '')))
+        h = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('host', '')))
         contents = util.frame(u, h)
         message = util.frame(code, type, contents)
         util.send(self.socket, message)
 
+    def send_extension_add_identity_message(self):
+        """Create SSH agent extension 'add identity' message and receive reply."""
+        log.debug('Add identity to agent')
+        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
+        type = util.frame(formats.convert_to_bytes('add@trezor.io'))
+        u = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('user', '')))
+        h = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('host', '')))
+        contents = util.frame(u, h)
+        message = util.frame(code, type, contents)
+        util.send(self.socket, message)
+
+    def send_extension_remove_identity_message(self):
+        """Create SSH agent extension 'remove identity' message and receive reply."""
+        log.debug('Remove identity from agent')
+        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
+        type = util.frame(formats.convert_to_bytes('remove@trezor.io'))
+        u = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('user', '')))
+        h = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('host', '')))
+        contents = util.frame(u, h)
+        message = util.frame(code, type, contents)
+        util.send(self.socket, message)
+
+    def send_extension_remove_all_identities_message(self):
+        """Create SSH agent extension 'remove all identities' message and receive reply."""
+        log.debug('Remove identity from agent')
+        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
+        type = util.frame(formats.convert_to_bytes('removeall@trezor.io'))
+        message = util.frame(code, type)
+        util.send(self.socket, message)
 
 
 
