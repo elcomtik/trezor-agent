@@ -135,6 +135,8 @@ def create_agent_parser(device_type):
                    help='Send agent remove extension query')
     p.add_argument('-R', '--removeall', default=False, action='store_true',
                    help='Send agent remove all extension query')
+    p.add_argument('-p', '--promisc', default=False, action='store_true',
+                   help='Set agent for promicuite mode - use filter messages as add message')
 
     return p
 
@@ -169,11 +171,11 @@ def serve(handler, sock_path, timeout=UNIX_SOCKET_TIMEOUT):
                 quit_event.set()
 
 
-def run_server(conn, command, sock_path, debug, timeout):
+def run_server(conn, command, sock_path, debug, timeout, promisc):
     """Common code for run_agent and run_git below."""
     ret = 0
     try:
-        handler = protocol.Handler(conn=conn, debug=debug)
+        handler = protocol.Handler(conn=conn, debug=debug, promisc=promisc)
         with serve(handler=handler, sock_path=sock_path,
                    timeout=timeout) as env:
             if command:
@@ -336,8 +338,8 @@ class JustInTimeConnection:
 
         c.write(filename)
 
-    def apply_filter(self, username, host):
-        self.filter = [username, host]
+    def apply_filter(self, user, host):
+        self.filter = [user, host]
 
     def clear_filter(self):
         self.filter = []
@@ -473,7 +475,7 @@ def main(device_type):
     elif command or args.daemonize or args.foreground:
         with context:
             return run_server(conn=conn, command=command, sock_path=sock_path,
-                              debug=args.debug, timeout=args.timeout)
+                              debug=args.debug, timeout=args.timeout, promisc=args.promisc)
     else:
         for pk in conn.public_keys():
             sys.stdout.write(pk)
