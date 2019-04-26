@@ -100,7 +100,7 @@ def create_agent_parser(device_type):
                    help='Path to the UNIX domain socket of the agent.')
     p.add_argument('--save', '-S', default=False, action='store_true',
                    help='Save all pubkeys to ~/.ssh/{hostname}.pub')
-    p.add_argument('--create-ssh-config', '-C', default=False, action='store_true',
+    p.add_argument('--create-ssh-config', '-C', type=str, default=None,
                    help='Create ssh config for loaded pubkeys')
 
     p.add_argument('--pin-entry-binary', type=str, default='pinentry',
@@ -418,6 +418,7 @@ def main(device_type):
                 public_keys = list(import_public_keys(identity_files))
                 identities = list(parse_config(identity_files+contents))
         else:
+            filename = args.create_ssh_config
             identities = [device.interface.Identity(
                 identity_str=args.identity, curve_name=args.ecdsa_curve_name)]
         for index, identity in enumerate(identities):
