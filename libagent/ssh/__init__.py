@@ -123,7 +123,7 @@ def create_agent_parser(device_type):
     g.add_argument('--mosh', default=False, action='store_true',
                    help='connect to specified host via using Mosh')
 
-    p.add_argument('identity', type=_to_unicode, default=None,
+    p.add_argument('identity', type=_to_unicode, default=None, nargs='?',
                    help='proto://[user@]host[:port][/path]')
     p.add_argument('command', type=str, nargs='*', metavar='ARGUMENT',
                    help='command to run under the SSH agent')
@@ -228,14 +228,19 @@ class JustInTimeConnection:
     def __init__(self, conn_factory, identities, public_keys=None):
         """Create a JIT connection object."""
         self.conn_factory = conn_factory
-        self.identities = identities        #TODO: make it load identities which are not loadeed as pubkeys
+        self.identities = identities
         self.public_keys_cache = public_keys
         self.public_keys_tempfiles = []
         self.filter = []
+        # load identities which are not loadeed from pubkeys
+        for i in identities:
+            self.add_identity(user=i.identity_dict['user'],
+                              host=i.identity_dict['host'],
+                              curve=i.curve_name)
 
     def public_keys(self):
         """Return a list of SSH public keys (in textual format)."""
-        if not self.public_keys_cache and self.identities:      #TODO: allow start agent without identities
+        if not self.public_keys_cache and self.identities:
             conn = self.conn_factory()
             self.public_keys_cache = conn.export_public_keys(self.identities)
         return self.public_keys_cache
@@ -259,13 +264,17 @@ class JustInTimeConnection:
 
         return self.public_keys_tempfiles
 
-    def add_identity(self, username, host, curve=formats.CURVE_NIST256):
-        #add it to self.identities
-        identity_str = username + "@" + host
+    def add_identity(self, user, host, curve=formats.CURVE_NIST256):
+        identity_str = user + "@" + host
         identity = device.interface.Identity(
             identity_str=identity_str, curve_name=curve)
+        identity.identity_dict['proto'] = u'ssh'
 
-        if identity.to_string() not in self.public_keys(): #TODO: this is shity
+        identity_str = identity.to_string()
+        present = [pk for pk in self.public_keys() if identity_str in pk]
+        if not present:
+            log.debug('Adding identity: %s', identity.to_string())
+            #add it to self.identities
             self.identities.append(identity)
 
             #load it to self.public_keys_cache
@@ -273,10 +282,10 @@ class JustInTimeConnection:
             added_pubkey = conn.export_public_keys([identity])
             self.public_keys_cache.extend(added_pubkey)
 
-    def remove_identity(self, username, host, curve=formats.CURVE_NIST256):
-        #remove it to self.identities
-        identity_str = username + "@" + host
+    def remove_identity(self, user, host, curve=formats.CURVE_NIST256):
+        identity_str = user + "@" + host
 
+        #remove it from self.identities & self.public_keys_cache
         self.identities = [i for i in self.identities if identity_str not in i.to_string()]
         self.public_keys_cache = [i for i in self.public_keys_cache if identity_str not in i]
 
@@ -392,24 +401,28 @@ def main(device_type):
     args = create_agent_parser(device_type=device_type).parse_args()
     util.setup_logging(verbosity=args.verbose, filename=args.log_file)
 
-    public_keys = None
+    public_keys = []
+    identities = []
     filename = None
-    if args.identity.startswith('/'):
-        filename = args.identity
-        log.debug('ssh config path: %s', filename)
-        contents = open(filename, 'rb').read().decode('utf-8')
-        # Allow loading previously exported SSH public keys
-        if filename.endswith('.pub'):
-            public_keys = list(import_public_keys(contents))
-        identity_files = parse_config_identity_files(contents)
-        public_keys = list(import_public_keys(identity_files))
-        identities = list(parse_config(contents+identity_files)) #TODO: make it unique
-    else:
-        identities = [device.interface.Identity(
-            identity_str=args.identity, curve_name=args.ecdsa_curve_name)]
-    for index, identity in enumerate(identities):
-        identity.identity_dict['proto'] = u'ssh'
-        log.info('identity #%d: %s', index, identity.to_string())
+    if args.identity:
+        if args.identity.startswith('/'):
+            filename = args.identity
+            log.debug('ssh config path: %s', filename)
+            contents = open(filename, 'rb').read().decode('utf-8')
+            # Allow loading previously exported SSH public keys
+            if filename.endswith('.pub'):
+                public_keys = list(import_public_keys(contents))
+                identities = list(parse_config(contents))
+            else:
+                identity_files = parse_config_identity_files(contents)
+                public_keys = list(import_public_keys(identity_files))
+                identities = list(parse_config(identity_files+contents))
+        else:
+            identities = [device.interface.Identity(
+                identity_str=args.identity, curve_name=args.ecdsa_curve_name)]
+        for index, identity in enumerate(identities):
+            identity.identity_dict['proto'] = u'ssh'
+            log.info('identity #%d: %s', index, identity.to_string())
 
     # override default PIN/passphrase entry tools (relevant for TREZOR/Keepkey):
     device_type.ui = device.ui.UI(device_type=device_type, config=vars(args))
@@ -448,13 +461,13 @@ def main(device_type):
         sys.stdin.close()
 
     if args.filter:
-        if agent_supports_extension(conn, 'filter@trezor.io'):
+        if identities and agent_supports_extension(conn, 'filter@trezor.io'):
             send_extension_msg(conn=conn, message='filter', identity=identities[0])
     elif args.add:
-        if agent_supports_extension(conn, 'add@trezor.io'):
+        if identities and agent_supports_extension(conn, 'add@trezor.io'):
             [send_extension_msg(conn=conn, message='add', identity=i) for i in identities]
     elif args.remove:
-        if agent_supports_extension(conn, 'remove@trezor.io'):
+        if identities and agent_supports_extension(conn, 'remove@trezor.io'):
             [send_extension_msg(conn=conn, message='remove', identity=i) for i in identities]
     elif args.removeall:
         if agent_supports_extension(conn, 'removeall@trezor.io'):

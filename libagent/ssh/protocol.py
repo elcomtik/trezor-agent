@@ -229,7 +229,7 @@ class Handler:
             log.debug('contents: %s@%s', user, host)
 
             #add identity
-            self.conn.add_identity(username=user, host=host)
+            self.conn.add_identity(user=user, host=host)
 
             # return success message
             log.debug("sending success message")
@@ -245,7 +245,7 @@ class Handler:
             log.debug('contents: %s@%s', user, host)
 
             # remove identity
-            self.conn.remove_identity(username=user, host=host)
+            self.conn.remove_identity(user=user, host=host)
 
             # return success message
             log.debug("sending success message")
