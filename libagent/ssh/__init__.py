@@ -135,8 +135,8 @@ def create_agent_parser(device_type):
                    help='Send agent remove extension query')
     p.add_argument('-R', '--removeall', default=False, action='store_true',
                    help='Send agent remove all extension query')
-    p.add_argument('-p', '--promisc', default=False, action='store_true',
-                   help='Set agent for promicuite mode - use filter messages as add message')
+    p.add_argument('-E', '--eager', default=False, action='store_true',
+                   help='Set agent to eager mode - use filter messages as add message')
 
     return p
 
@@ -171,11 +171,11 @@ def serve(handler, sock_path, timeout=UNIX_SOCKET_TIMEOUT):
                 quit_event.set()
 
 
-def run_server(conn, command, sock_path, debug, timeout, promisc):
+def run_server(conn, command, sock_path, debug, timeout, eager):
     """Common code for run_agent and run_git below."""
     ret = 0
     try:
-        handler = protocol.Handler(conn=conn, debug=debug, promisc=promisc)
+        handler = protocol.Handler(conn=conn, debug=debug, eager=eager)
         with serve(handler=handler, sock_path=sock_path,
                    timeout=timeout) as env:
             if command:
@@ -475,7 +475,7 @@ def main(device_type):
     elif command or args.daemonize or args.foreground:
         with context:
             return run_server(conn=conn, command=command, sock_path=sock_path,
-                              debug=args.debug, timeout=args.timeout, promisc=args.promisc)
+                              debug=args.debug, timeout=args.timeout, eager=args.eager)
     else:
         for pk in conn.public_keys():
             sys.stdout.write(pk)
