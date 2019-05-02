@@ -83,7 +83,7 @@ def _legacy_pubs(buf):
 class Handler:
     """ssh-agent protocol handler."""
 
-    def __init__(self, conn, debug=False, promisc=False):
+    def __init__(self, conn, debug=False, eager=False):
         """
         Create a protocol handler with specified public keys.
 
@@ -91,7 +91,7 @@ class Handler:
         """
         self.conn = conn
         self.debug = debug
-        self.promisc = promisc
+        self.eager = eager
 
         self.methods = {
             msg_code('SSH_AGENTC_REQUEST_RSA_IDENTITIES'): _legacy_pubs,
@@ -213,7 +213,7 @@ class Handler:
             host = util.read_frame(contents).decode()
             log.debug('contents: %s@%s', user, host)
 
-            if self.promisc:
+            if self.eager:
                 self.conn.add_identity(user=user, host=host)
 
             #apply filter
