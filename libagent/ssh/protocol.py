@@ -47,9 +47,10 @@ COMMANDS = dict(
 
 EXT_MSGS = [
     'query',
-    'filter@trezor.io',
     'add@trezor.io',
     'remove@trezor.io'
+    'filter@trezor.io',
+    'request_identities_filtered@trezor.io',
 ]
 
 def msg_code(name):
@@ -232,6 +233,39 @@ class Handler:
             log.debug("sending success message")
             code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
             return util.frame(code)
+
+        elif type == 'request_identities_filtered@trezor.io':
+            contents = util.read_frame(buf)
+            log.debug('raw contents: %s', contents)
+            contents = io.BytesIO(contents)
+            user = util.read_frame(contents).decode()
+            host = util.read_frame(contents).decode()
+            log.debug('contents: %s@%s', user, host)
+
+            if self.eager:
+                self.conn.add_identity(user=user, host=host)
+
+            assert not buf.read()
+            keys = self.conn.parse_public_keys()
+            code = util.pack('B', msg_code('SSH2_AGENT_IDENTITIES_ANSWER'))
+            log.debug('available keys: %s', [k['name'] for k in keys])
+
+            # apply filter on loaded keys
+            identity = user + '@' + host
+            keys_filtered = []
+            for k in keys:
+                if identity in k['name'].decode():
+                    keys_filtered.append(k)
+
+            keys = keys_filtered
+            log.debug('filtered keys: %s', [k['name'] for k in keys])
+
+            # return list of public keys
+            num = util.pack('L', len(keys))
+            for i, k in enumerate(keys):
+                log.debug('%2d) %s', i + 1, k['fingerprint'])
+            pubs = [util.frame(k['blob']) + util.frame(k['name']) for k in keys]
+            return util.frame(code, num, *pubs)
 
         elif type == 'add@trezor.io':
             contents = util.read_frame(buf)
