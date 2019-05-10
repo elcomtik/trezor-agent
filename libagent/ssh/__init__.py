@@ -362,7 +362,7 @@ def _get_sock_path(args):
 
 
 def agent_supports_extension(conn, message_type):
-    """Query agetn of support specified extension message"""
+    """Query agent support of specified extension message"""
     ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
     if not ssh_auth_sock:
         return
@@ -379,8 +379,8 @@ def agent_supports_extension(conn, message_type):
         return message_type in messages
 
 
-def send_extension_msg(conn, message, identity=None):
-    """Send extension query to agent"""
+def send_agent_msg(conn, message, identity=None):
+    """Send message to agent"""
     ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
     if not ssh_auth_sock:
         return
@@ -462,16 +462,15 @@ def main(device_type):
 
     if args.filter:
         if identities and agent_supports_extension(conn, 'filter@trezor.io'):
-            send_extension_msg(conn=conn, message='filter', identity=identities[0])
+            send_agent_msg(conn=conn, message='filter', identity=identities[0])
     elif args.add:
         if identities and agent_supports_extension(conn, 'add@trezor.io'):
-            [send_extension_msg(conn=conn, message='add', identity=i) for i in identities]
+            [send_agent_msg(conn=conn, message='add', identity=i) for i in identities]
     elif args.remove:
         if identities and agent_supports_extension(conn, 'remove@trezor.io'):
-            [send_extension_msg(conn=conn, message='remove', identity=i) for i in identities]
+            [send_agent_msg(conn=conn, message='remove', identity=i) for i in identities]
     elif args.removeall:
-        if agent_supports_extension(conn, 'removeall@trezor.io'):
-            send_extension_msg(conn=conn, message='removeall')
+            send_agent_msg(conn=conn, message='removeall')
     elif command or args.daemonize or args.foreground:
         with context:
             return run_server(conn=conn, command=command, sock_path=sock_path,
