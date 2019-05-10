@@ -48,7 +48,7 @@ COMMANDS = dict(
 EXT_MSGS = [
     'query',
     'add@trezor.io',
-    'remove@trezor.io'
+    'remove@trezor.io',
     'filter@trezor.io',
     'request_identities_filtered@trezor.io',
 ]
