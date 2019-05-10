@@ -49,8 +49,7 @@ EXT_MSGS = [
     'query',
     'filter@trezor.io',
     'add@trezor.io',
-    'remove@trezor.io',
-    'removeall@trezor.io'
+    'remove@trezor.io'
 ]
 
 def msg_code(name):
@@ -95,6 +94,7 @@ class Handler:
 
         self.methods = {
             msg_code('SSH_AGENTC_REQUEST_RSA_IDENTITIES'): _legacy_pubs,
+            msg_code('SSH2_AGENTC_REMOVE_ALL_IDENTITIES'): self.remove_all_identities,
             msg_code('SSH2_AGENTC_REQUEST_IDENTITIES'): self.list_pubs,
             msg_code('SSH2_AGENTC_SIGN_REQUEST'): self.sign_message,
             msg_code('SSH_AGENTC_EXTENSION'): self.process_extension_message,
@@ -117,6 +117,15 @@ class Handler:
         debug_reply = ': {!r}'.format(reply) if self.debug else ''
         log.debug('reply: %d bytes%s', len(reply), debug_reply)
         return reply
+
+    def remove_all_identities(self, buf):
+        """All identities loaded in agent are removed."""
+        assert not buf.read()
+        self.conn.remove_all_identities()
+
+        log.debug("sending success message")
+        code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
+        return util.frame(code)
 
     def list_pubs(self, buf):
         """SSH v2 public keys are serialized and returned."""
@@ -256,15 +265,6 @@ class Handler:
             code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
             return util.frame(code)
 
-        elif type == 'removeall@trezor.io':
-            # remove all identities
-            self.conn.remove_all_identities()
-
-            # return success message
-            log.debug("sending success message")
-            code = util.pack('B', msg_code('SSH_AGENT_SUCCESS'))
-            return util.frame(code)
-
         else:
             # return failure due to unknnown message type
             log.debug('unknown extension message type')
@@ -286,11 +286,11 @@ class Sender:
             'filter': self.send_extension_filter_message,
             'add': self.send_extension_add_identity_message,
             'remove': self.send_extension_remove_identity_message,
-            'removeall': self.send_extension_remove_all_identities_message,
+            'removeall': self.send_ssh2_agentc_remove_all_identities_message,
         }
 
     def send(self, message, identity=None):
-        """Send SSH extension message to SSH agent and return the response."""
+        """Send SSH agent message to agent and return the response."""
         if message not in self.methods:
             log.warning('Unsupported command: %s', message)
             return failure()
@@ -319,8 +319,15 @@ class Sender:
             else:
                 return 1
 
+    def send_ssh2_agentc_remove_all_identities_message(self):
+        """Create SSH agent message SSH2_AGENTC_REMOVE_ALL_IDENTITIES"""
+        log.debug('Remove all identities from agent')
+        code = util.pack('B', msg_code('SSH2_AGENTC_REMOVE_ALL_IDENTITIES'))
+        message = util.frame(code)
+        util.send(self.socket, message)
+
     def send_extension_query_message(self):
-        """Create SSH agent extension query message and receive reply."""
+        """Create SSH agent extension query message."""
         log.debug('Request supported extension method list')
         code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
         type = util.frame(formats.convert_to_bytes('query'))
@@ -328,7 +335,7 @@ class Sender:
         util.send(self.socket, message)
 
     def send_extension_filter_message(self):
-        """Create SSH agent extension 'filter' message and receive reply."""
+        """Create SSH agent extension 'filter' message."""
         log.debug('Filter agent available keys')
         code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
         type = util.frame(formats.convert_to_bytes('filter@trezor.io'))
@@ -339,7 +346,7 @@ class Sender:
         util.send(self.socket, message)
 
     def send_extension_add_identity_message(self):
-        """Create SSH agent extension 'add identity' message and receive reply."""
+        """Create SSH agent extension 'add identity' message."""
         log.debug('Add identity to agent')
         code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
         type = util.frame(formats.convert_to_bytes('add@trezor.io'))
@@ -350,7 +357,7 @@ class Sender:
         util.send(self.socket, message)
 
     def send_extension_remove_identity_message(self):
-        """Create SSH agent extension 'remove identity' message and receive reply."""
+        """Create SSH agent extension 'remove identity' message."""
         log.debug('Remove identity from agent')
         code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
         type = util.frame(formats.convert_to_bytes('remove@trezor.io'))
@@ -358,14 +365,6 @@ class Sender:
         h = util.frame(formats.convert_to_bytes(self.identity.identity_dict.get('host', '')))
         contents = util.frame(u, h)
         message = util.frame(code, type, contents)
-        util.send(self.socket, message)
-
-    def send_extension_remove_all_identities_message(self):
-        """Create SSH agent extension 'remove all identities' message and receive reply."""
-        log.debug('Remove identity from agent')
-        code = util.pack('B', msg_code('SSH_AGENTC_EXTENSION'))
-        type = util.frame(formats.convert_to_bytes('removeall@trezor.io'))
-        message = util.frame(code, type)
         util.send(self.socket, message)
 
 
