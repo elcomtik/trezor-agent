@@ -17,7 +17,7 @@ import configargparse
 import daemon
 
 from pathlib import Path
-from sshconf import read_ssh_config, empty_ssh_config
+from sshconf import read_ssh_config, empty_ssh_config_file
 import stat
 import shutil
 
@@ -318,12 +318,19 @@ class JustInTimeConnection:
         self.save_public_keys_as_files()
         if filename is None:
             filename = Path('~/.ssh/config').expanduser().absolute()
-
-        backup = str(filename) + ".backup"
-        shutil.copy2(filename, backup)
-        st = os.stat(filename)
-        os.chown(backup, st[stat.ST_UID], st[stat.ST_GID])
-        os.chmod(backup, 0o600)
+        
+        if os.path.exists(filename):
+            backup = str(filename) + ".backup"
+            shutil.copy2(filename, backup)
+            st = os.stat(filename)
+            os.chown(backup, st[stat.ST_UID], st[stat.ST_GID])
+            os.chmod(backup, 0o600)
+        else:
+            with open(filename, 'w') as ssh_config_file: pass
+            uid = os.getuid()
+            gid = os.getgid()
+            os.chown(filename, st[uid], st[gid])
+            os.chmod(filename, 0o600)
 
         c = read_ssh_config(filename)
         for I in self.identities:
